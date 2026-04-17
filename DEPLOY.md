@@ -18,13 +18,11 @@ handles queue + match-found handoff.
 
 1. Push your repo to GitHub (done).
 2. Go to <https://railway.app> → **New Project** → **Deploy from GitHub repo**.
-3. Pick `FPS-game`.
-4. In the service settings:
-   - **Root Directory**: `server`
-   - **Start Command**: `node dist/index.js` (or leave blank — `railway.json` already sets it)
-   - Railway auto-detects Node and runs `npm install && npm run build` via Nixpacks.
-5. Click **Generate Domain**. Copy the URL, e.g. `https://fps-mm.up.railway.app`.
-6. **Environment variables** (Railway → Variables tab):
+3. Pick `FPS-game`. **Leave Root Directory at the default (repo root)** —
+   the `railway.json` at the repo root tells Nixpacks to install and build
+   only the `server` workspace. No UI tweaks required.
+4. Click **Generate Domain**. Copy the URL, e.g. `https://fps-mm.up.railway.app`.
+5. **Environment variables** (Railway → Variables tab):
    - `TEAM_TEAM_SIZE=2` while you test (lets matches form with just 2 players;
      bump to `10` later for real 5v5).
    - `FPS_SPAWN_GAME_SERVERS=0` (Railway doesn't expose UDP by default, so
@@ -123,6 +121,7 @@ IP. Players on the same WiFi can connect.
 | Symptom | Fix |
 | --- | --- |
 | Vercel build fails on `npm install` with Electron download error | Add env var `ELECTRON_SKIP_BINARY_DOWNLOAD=1` in Vercel project settings. |
+| Railway build fails with `Missing script: "build"` | Pull the latest `main` — the root `railway.json` and root `build`/`start` scripts in `package.json` handle this. Then hit **Redeploy** in Railway. |
 | Browser shows "Matchmaking offline" | `VITE_MATCHMAKING_URL` wrong, or Railway service is sleeping on the free tier. Visit `/health` to wake it. |
 | Match found but game can't connect | Check `GAME_SERVER_IP` on Railway. UDP 7777 needs to be reachable from clients. Try `nc -vu <ip> 7777` from another machine. |
 | Clients see different maps | They probably used different `--map` flags. In team mode the first-queued player's map is sent to everyone; make sure the launch command includes `--map` from `match:found`. |

@@ -10,9 +10,11 @@
   "scripts": {
     "dev:launcher": "npm --workspace launcher run dev",
     "dev:server": "npm --workspace server run dev",
+    "build": "npm --workspace server run build",
     "build:launcher": "npm --workspace launcher run build",
     "build:server": "npm --workspace server run build",
     "build:game": "cmake -S game -B game/build -DCMAKE_BUILD_TYPE=Release && cmake --build game/build -j",
+    "start": "npm --workspace server run start",
     "start:server": "npm --workspace server run start"
   }
 }
