@@ -1,0 +1,18 @@
+{
+  "name": "fps-game",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Valorant-inspired FPS: React/Electron launcher + Node matchmaker + C++/Raylib game.",
+  "workspaces": [
+    "launcher",
+    "server"
+  ],
+  "scripts": {
+    "dev:launcher": "npm --workspace launcher run dev",
+    "dev:server": "npm --workspace server run dev",
+    "build:launcher": "npm --workspace launcher run build",
+    "build:server": "npm --workspace server run build",
+    "build:game": "cmake -S game -B game/build -DCMAKE_BUILD_TYPE=Release && cmake --build game/build -j",
+    "start:server": "npm --workspace server run start"
+  }
+}

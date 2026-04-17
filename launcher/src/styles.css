@@ -1,0 +1,140 @@
+:root {
+  --bg-0: #07070b;
+  --bg-1: #0f1017;
+  --bg-2: #171a26;
+  --accent: #ff4655;
+  --accent-muted: #c73644;
+  --text: #e6e8ef;
+  --text-muted: #8a8fa3;
+  --ok: #3ddc84;
+  --warn: #f2b84b;
+  --err: #ff4655;
+  --radius: 8px;
+  font-family: "Inter", "Segoe UI", system-ui, sans-serif;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html, body, #root { height: 100%; margin: 0; }
+body {
+  background: radial-gradient(circle at 30% 20%, #1a1d2c 0%, var(--bg-0) 60%);
+  color: var(--text);
+  overflow: hidden;
+}
+
+button { cursor: pointer; font-family: inherit; }
+
+.app { display: grid; grid-template-columns: 260px 1fr; height: 100vh; }
+
+.sidebar {
+  background: var(--bg-1);
+  border-right: 1px solid #222635;
+  padding: 24px 20px;
+  display: flex;
+  flex-direction: column;
+}
+
+.brand {
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: 2px;
+  color: var(--accent);
+  margin-bottom: 32px;
+}
+
+.nav { display: flex; flex-direction: column; gap: 4px; }
+
+.nav-item {
+  background: transparent;
+  color: var(--text-muted);
+  border: none;
+  text-align: left;
+  padding: 10px 12px;
+  font-size: 14px;
+  border-radius: var(--radius);
+  transition: background 120ms, color 120ms;
+}
+.nav-item:hover { background: #1b1f2d; color: var(--text); }
+.nav-item.active { background: var(--bg-2); color: var(--text); }
+
+.status-pill {
+  margin-top: auto;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-muted);
+}
+.status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--err); }
+.status-dot.ok { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
+
+.main { overflow-y: auto; padding: 48px 56px; }
+.page h1 { font-size: 36px; margin: 0 0 8px; letter-spacing: 1px; }
+.page .subtitle { color: var(--text-muted); margin-bottom: 32px; }
+
+.cta {
+  background: var(--accent); color: white; border: none;
+  padding: 16px 40px; font-size: 16px; font-weight: 700;
+  letter-spacing: 1px; text-transform: uppercase;
+  border-radius: var(--radius);
+  transition: transform 100ms, background 120ms;
+}
+.cta:hover { background: var(--accent-muted); transform: translateY(-1px); }
+.cta.secondary { background: transparent; border: 1px solid #2b3143; color: var(--text); }
+.cta.secondary:hover { background: #1a1e2c; }
+.cta:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.card {
+  background: var(--bg-2);
+  border: 1px solid #232739;
+  border-radius: var(--radius);
+  padding: 24px;
+}
+
+.grid-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+
+.mode-card {
+  text-align: left; color: var(--text);
+  background: var(--bg-2); border: 1px solid #232739;
+  border-radius: var(--radius); padding: 20px;
+  transition: border-color 120ms, transform 120ms;
+}
+.mode-card:hover { border-color: var(--accent); transform: translateY(-2px); }
+.mode-card h3 { margin: 0 0 6px; font-size: 18px; }
+.mode-card p { margin: 0; color: var(--text-muted); font-size: 13px; }
+
+.matchmaking {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  min-height: 60vh; gap: 24px;
+}
+
+.spinner {
+  width: 64px; height: 64px; border-radius: 50%;
+  border: 3px solid #2b3143; border-top-color: var(--accent);
+  animation: spin 900ms linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.match-info { text-align: center; color: var(--text-muted); }
+.match-info strong { color: var(--text); }
+
+.form-row { display: flex; flex-direction: column; gap: 6px; margin-bottom: 16px; }
+.form-row label { font-size: 12px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 1px; }
+.form-row input {
+  background: var(--bg-1); color: var(--text);
+  border: 1px solid #2b3143; border-radius: var(--radius);
+  padding: 10px 12px; font-size: 14px;
+}
+.form-row input:focus { outline: 1px solid var(--accent); }
+
+.banner {
+  background: rgba(255, 70, 85, 0.08);
+  border: 1px solid rgba(255, 70, 85, 0.3);
+  padding: 12px 16px; border-radius: var(--radius);
+  color: var(--accent); font-size: 13px;
+}
+.banner.ok {
+  background: rgba(61, 220, 132, 0.08);
+  border-color: rgba(61, 220, 132, 0.3);
+  color: var(--ok);
+}

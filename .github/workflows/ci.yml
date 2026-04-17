@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  js:
+    name: Launcher + Server (Node)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+      - run: npm ci
+      - run: npm --workspace server run build
+      - run: npm --workspace launcher run build
+
+  game-macos:
+    name: Game (macOS)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: brew install cmake raylib enet
+      - run: cmake -S game -B game/build -DCMAKE_BUILD_TYPE=Release
+      - run: cmake --build game/build -j
+
+  game-linux:
+    name: Game (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake libenet-dev \
+            libgl1-mesa-dev libx11-dev libxrandr-dev libxinerama-dev \
+            libxcursor-dev libxi-dev libasound2-dev
+      - run: cmake -S game -B game/build -DCMAKE_BUILD_TYPE=Release
+      - run: cmake --build game/build -j
+
+  game-windows:
+    name: Game (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - shell: bash
+        run: cmake -S game -B game/build -DCMAKE_BUILD_TYPE=Release
+      - shell: bash
+        run: cmake --build game/build --config Release -j
