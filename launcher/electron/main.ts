@@ -44,7 +44,20 @@ function createWindow(): void {
 
 ipcMain.handle(
   "fps:launchGame",
-  async (_evt, args: { ip: string; port: number; token: string; name: string; mode: string; fov?: number; sensitivity?: number }) => {
+  async (
+    _evt,
+    args: {
+      ip: string;
+      port: number;
+      token: string;
+      name: string;
+      mode: string;
+      fov?: number;
+      sensitivity?: number;
+      difficulty?: string;
+      mapId?: string;
+    }
+  ) => {
     const binary = resolveGameBinary();
     if (!fs.existsSync(binary)) {
       return { ok: false, error: `Game binary not found at ${binary}. Build it with 'npm run build:game'.` };
@@ -57,6 +70,8 @@ ipcMain.handle(
     ];
     if (typeof args.fov === "number") cliArgs.push(`--fov=${args.fov}`);
     if (typeof args.sensitivity === "number") cliArgs.push(`--sensitivity=${args.sensitivity}`);
+    if (args.difficulty) cliArgs.push(`--difficulty=${args.difficulty}`);
+    if (args.mapId)      cliArgs.push(`--map=${args.mapId}`);
     const child = spawn(binary, cliArgs, { detached: true, stdio: "ignore" });
     child.unref();
     return { ok: true, pid: child.pid };

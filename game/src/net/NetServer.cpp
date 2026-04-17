@@ -51,17 +51,20 @@ void NetServer::poll() {
                 HelloPacket hp;
                 std::memcpy(&hp, ev.packet->data, sizeof(hp));
                 c.name = std::string(hp.name, strnlen(hp.name, sizeof(hp.name)));
-                WelcomePacket wp{};
-                wp.clientId = c.clientId;
-                wp.mapSeed = 0;
-                ENetPacket* pkt = enet_packet_create(&wp, sizeof(wp), ENET_PACKET_FLAG_RELIABLE);
-                enet_peer_send(c.peer, 0, pkt);
-                std::printf("[net] client %u name=%s welcomed\n", c.clientId, c.name.c_str());
+                if (joinH_) joinH_(c); // game layer assigns team + spawn
+                sendWelcome(c);
+                std::printf("[net] client %u name=%s team=%u welcomed\n",
+                            c.clientId, c.name.c_str(), c.team);
             } else if (id == C2S_Input && ev.packet->dataLength >= sizeof(InputPacket)) {
                 InputPacket in;
                 std::memcpy(&in, ev.packet->data, sizeof(in));
                 c.pending.push_back(in.input);
                 while (c.pending.size() > 64) c.pending.pop_front();
+            } else if (id == C2S_Fire && ev.packet->dataLength >= sizeof(FirePacket)) {
+                FirePacket fp;
+                std::memcpy(&fp, ev.packet->data, sizeof(fp));
+                c.pendingFires.push_back(fp);
+                while (c.pendingFires.size() > 32) c.pendingFires.pop_front();
             }
             enet_packet_destroy(ev.packet);
             break;
@@ -79,11 +82,32 @@ void NetServer::poll() {
     }
 }
 
+void NetServer::sendWelcome(ConnectedClient& c) {
+    WelcomePacket wp{};
+    wp.clientId = c.clientId;
+    wp.team     = c.team;
+    wp.mapSeed  = 0;
+    ENetPacket* pkt = enet_packet_create(&wp, sizeof(wp), ENET_PACKET_FLAG_RELIABLE);
+    enet_peer_send(c.peer, 0, pkt);
+}
+
 void NetServer::broadcastSnapshot(const SnapshotPacket& snap) {
     if (!host_) return;
     ENetPacket* pkt = enet_packet_create(&snap, sizeof(snap), 0);
     enet_host_broadcast(host_, 1, pkt);
     enet_host_flush(host_);
+}
+
+void NetServer::sendSnapshotTo(ConnectedClient& c, SnapshotPacket snap) {
+    if (!c.peer) return;
+    ENetPacket* pkt = enet_packet_create(&snap, sizeof(snap), 0);
+    enet_peer_send(c.peer, 1, pkt);
+}
+
+void NetServer::sendHitFeedback(ConnectedClient& c, const HitFeedbackPacket& hit) {
+    if (!c.peer) return;
+    ENetPacket* pkt = enet_packet_create(&hit, sizeof(hit), ENET_PACKET_FLAG_RELIABLE);
+    enet_peer_send(c.peer, 0, pkt);
 }
 
 std::vector<ConnectedClient*> NetServer::clients() {

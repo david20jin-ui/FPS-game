@@ -53,6 +53,12 @@ void NetClient::sendInput(const PlayerInput& in) {
     enet_peer_send(peer_, 1, pkt);
 }
 
+void NetClient::sendFire(const FirePacket& fp) {
+    if (!connected_ || !peer_) return;
+    ENetPacket* pkt = enet_packet_create(&fp, sizeof(fp), ENET_PACKET_FLAG_RELIABLE);
+    enet_peer_send(peer_, 1, pkt);
+}
+
 void NetClient::poll() {
     if (!host_) return;
     ENetEvent ev{};
@@ -65,11 +71,16 @@ void NetClient::poll() {
                 WelcomePacket wp;
                 std::memcpy(&wp, ev.packet->data, sizeof(wp));
                 clientId_ = wp.clientId;
+                team_     = wp.team;
                 if (welcomeH_) welcomeH_(wp);
             } else if (id == S2C_Snapshot && ev.packet->dataLength >= sizeof(SnapshotPacket)) {
                 SnapshotPacket sp;
                 std::memcpy(&sp, ev.packet->data, sizeof(sp));
                 if (snapshotH_) snapshotH_(sp);
+            } else if (id == S2C_HitFeedback && ev.packet->dataLength >= sizeof(HitFeedbackPacket)) {
+                HitFeedbackPacket hp;
+                std::memcpy(&hp, ev.packet->data, sizeof(hp));
+                if (hitH_) hitH_(hp);
             }
             enet_packet_destroy(ev.packet);
             break;

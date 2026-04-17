@@ -54,6 +54,7 @@ set(FPS_CLIENT_SOURCES
     src/core/App.cpp
     src/render/Hud.cpp
     src/render/SoundBank.cpp
+    src/render/ViewModel.cpp
     src/main.cpp
 )
 

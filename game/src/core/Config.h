@@ -10,6 +10,8 @@ struct Config {
     std::string token      = "dev";
     std::string playerName = "Agent";
     std::string mode       = "solo";
+    std::string difficulty = "medium";  // "easy" | "medium" | "hard"
+    std::string mapName    = "range";   // "range" | "warehouse" | "arena"
     float       fovDegrees = 90.0f;
     float       sensitivity = 0.4f;
     int         windowWidth  = 1600;

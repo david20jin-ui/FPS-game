@@ -9,6 +9,8 @@ declare global {
     mode: string;
     fov?: number;
     sensitivity?: number;
+    difficulty?: string;
+    mapId?: string;
   }
 
   interface FpsLaunchResult {

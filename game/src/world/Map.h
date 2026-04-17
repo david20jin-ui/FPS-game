@@ -3,6 +3,7 @@
 #include "../core/Math.h"
 
 #include <raylib.h>
+#include <string>
 #include <vector>
 
 namespace fps {
@@ -23,8 +24,14 @@ struct Map {
     Vector3 playerSpawn{0.0f, 1.0f, 0.0f};
     std::vector<Vector3> botSpawns;
     std::vector<NavWaypoint> navGraph;
+    std::string displayName = "Map";
 
     static Map buildDefault();
+    static Map buildRange();
+    static Map buildWarehouse();
+    static Map buildArena();
+    // Factory by name: "range" | "warehouse" | "arena" (falls back to range).
+    static Map buildByName(const std::string& name);
 };
 
 bool raycastMap(const Map& map, Vector3 origin, Vector3 dir, float maxDist,

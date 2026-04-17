@@ -39,6 +39,10 @@ Config parseCli(int argc, char** argv) {
             cfg.playerName = std::string(value);
         } else if (key == "mode") {
             cfg.mode = std::string(value);
+        } else if (key == "difficulty") {
+            cfg.difficulty = std::string(value);
+        } else if (key == "map") {
+            cfg.mapName = std::string(value);
         } else if (key == "fov") {
             cfg.fovDegrees = static_cast<float>(std::atof(std::string(value).c_str()));
         } else if (key == "sensitivity") {
@@ -56,6 +60,8 @@ Config parseCli(int argc, char** argv) {
                 "  --token=<token>          opaque match token\n"
                 "  --name=<name>            display name\n"
                 "  --mode=solo|team         match mode (default solo)\n"
+                "  --difficulty=easy|medium|hard   bot difficulty (default medium)\n"
+                "  --map=range|warehouse|arena     map selection (default range)\n"
                 "  --fov=<deg>              field of view (default 90)\n"
                 "  --sensitivity=<f>        mouse sensitivity (default 0.4)\n"
                 "  --width=<px> --height=<px>   window size\n"

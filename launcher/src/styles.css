@@ -92,6 +92,51 @@ button { cursor: pointer; font-family: inherit; }
 }
 
 .grid-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.grid-3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; max-width: 900px; }
+
+.option-card {
+  position: relative;
+  text-align: left;
+  color: var(--text);
+  background: var(--bg-2);
+  border: 1px solid #232739;
+  border-radius: var(--radius);
+  padding: 16px 16px 16px 20px;
+  transition: border-color 120ms, transform 120ms;
+  cursor: pointer;
+  overflow: hidden;
+}
+.option-card:hover { transform: translateY(-2px); }
+.option-card.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+.option-card h4 { margin: 6px 0 4px; font-size: 17px; }
+.option-card p  { margin: 0; color: var(--text-muted); font-size: 12px; line-height: 1.4; }
+.option-accent { position: absolute; top: 0; left: 0; bottom: 0; width: 4px; }
+
+.map-preview {
+  height: 64px;
+  border-radius: 6px;
+  margin-bottom: 10px;
+  background: #0f1320;
+  position: relative;
+  overflow: hidden;
+}
+.map-preview[data-map="range"]::before {
+  content: ""; position: absolute; inset: 10px 12px;
+  background:
+    linear-gradient(90deg, transparent 30%, #5a6280 30% 70%, transparent 70%),
+    radial-gradient(circle at 50% 50%, #6a4a2c 0 8px, transparent 9px);
+}
+.map-preview[data-map="warehouse"]::before {
+  content: ""; position: absolute; inset: 10px 6px;
+  background:
+    repeating-linear-gradient(90deg, transparent 0 18px, #6a5a3a 18px 22px);
+}
+.map-preview[data-map="arena"]::before {
+  content: ""; position: absolute; inset: 6px;
+  background: radial-gradient(circle, #b87a3c 0 10px, transparent 12px 100%);
+  border: 1px solid #3a2a4c;
+  border-radius: 50%;
+}
 
 .mode-card {
   text-align: left; color: var(--text);

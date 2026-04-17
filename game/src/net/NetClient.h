@@ -19,6 +19,7 @@ public:
 
     using SnapshotHandler = std::function<void(const SnapshotPacket&)>;
     using WelcomeHandler  = std::function<void(const WelcomePacket&)>;
+    using HitHandler      = std::function<void(const HitFeedbackPacket&)>;
 
     NetClient();
     ~NetClient();
@@ -30,21 +31,26 @@ public:
     void disconnect();
 
     void sendInput(const PlayerInput& in);
+    void sendFire(const FirePacket& fp);
     void poll();
 
     bool connected() const { return connected_; }
     uint8_t clientId() const { return clientId_; }
+    uint8_t team() const     { return team_; }
 
     void onSnapshot(SnapshotHandler h) { snapshotH_ = std::move(h); }
     void onWelcome(WelcomeHandler h)   { welcomeH_  = std::move(h); }
+    void onHitFeedback(HitHandler h)   { hitH_      = std::move(h); }
 
 private:
     _ENetHost* host_ = nullptr;
     _ENetPeer* peer_ = nullptr;
     bool       connected_ = false;
-    uint8_t    clientId_ = 0;
+    uint8_t    clientId_  = 0;
+    uint8_t    team_      = 0;
     SnapshotHandler snapshotH_;
     WelcomeHandler  welcomeH_;
+    HitHandler      hitH_;
 };
 
 } // namespace fps::net

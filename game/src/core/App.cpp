@@ -1,9 +1,11 @@
 #include "App.h"
 
 #include "../ai/Bot.h"
+#include "../net/NetClient.h"
 #include "../player/Player.h"
 #include "../render/Hud.h"
 #include "../render/SoundBank.h"
+#include "../render/ViewModel.h"
 #include "../weapons/Smoke.h"
 #include "../weapons/Weapon.h"
 #include "../world/Map.h"
@@ -14,6 +16,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
+#include <memory>
 #include <vector>
 
 namespace fps {
@@ -30,6 +33,55 @@ struct TracerEffect {
 struct MuzzleFlashEffect {
     float life = 0.0f;
 };
+
+// Latest-known state for a non-local entity (remote player or server-owned bot).
+struct RemoteEntity {
+    uint8_t id = 0;
+    uint8_t kind = 0;    // 0 = player, 1 = bot
+    uint8_t team = 2;    // 0 blue, 1 red, 2 unaffiliated
+    bool    alive = true;
+    int     health = 100;
+    int     kills = 0;
+    Vector3 position{};
+    float   yaw = 0.0f;
+    float   pitch = 0.0f;
+};
+
+Color teamColor(uint8_t team) {
+    switch (team) {
+    case 0: return Color{ 80, 150, 230, 255}; // blue
+    case 1: return Color{230,  80,  90, 255}; // red
+    default: return Color{200, 200, 200, 255};
+    }
+}
+
+Color teamColorDark(uint8_t team) {
+    switch (team) {
+    case 0: return Color{ 40,  80, 140, 255};
+    case 1: return Color{140,  40,  50, 255};
+    default: return Color{ 90,  90,  90, 255};
+    }
+}
+
+void drawRemoteAgent(const RemoteEntity& e) {
+    if (!e.alive) return;
+    const float r = 0.35f, h = 1.7f;
+    Vector3 body{e.position.x, e.position.y + h * 0.55f, e.position.z};
+    Vector3 head{e.position.x, e.position.y + h - 0.15f, e.position.z};
+    DrawCube(body, r * 1.8f, h, r * 1.8f, teamColor(e.team));
+    DrawCubeWires(body, r * 1.8f, h, r * 1.8f, teamColorDark(e.team));
+    DrawSphere(head, r * 0.9f, teamColor(e.team));
+    Vector3 aim{head.x + std::sin(e.yaw) * 0.5f,
+                head.y + std::sin(e.pitch) * 0.5f,
+                head.z + std::cos(e.yaw) * 0.5f};
+    DrawLine3D(head, aim, Color{255, 220, 80, 255});
+    // Floating health bar.
+    float frac = clampf(static_cast<float>(e.health) / 100.0f, 0.0f, 1.0f);
+    Vector3 barPos{e.position.x, e.position.y + h + 0.25f, e.position.z};
+    DrawCube(barPos, 0.6f, 0.07f, 0.02f, Color{0, 0, 0, 180});
+    DrawCube({barPos.x - 0.30f + 0.30f * frac, barPos.y, barPos.z},
+             0.6f * frac, 0.06f, 0.03f, Color{60, 220, 110, 255});
+}
 
 void drawBot(const Bot& bot) {
     if (!bot.alive) return;
@@ -92,7 +144,15 @@ int runApp(const Config& cfg) {
     SoundBank sfx;
     sfx.load();
 
-    Map world = Map::buildDefault();
+    Map world = Map::buildByName(cfg.mapName);
+
+    // Translate CLI difficulty string to per-bot BotDifficulty.
+    auto parseDifficulty = [](const std::string& s) {
+        if (s == "easy")   return BotDifficulty::Easy;
+        if (s == "hard")   return BotDifficulty::Hard;
+        return BotDifficulty::Normal; // "medium" and everything else
+    };
+    const BotDifficulty selectedDifficulty = parseDifficulty(cfg.difficulty);
 
     Player player{};
     player.spawn(world.playerSpawn);
@@ -111,16 +171,18 @@ int runApp(const Config& cfg) {
     int currentWeapon = 0;
 
     std::vector<Bot> bots;
-    const BotDifficulty difficulties[] = {
-        BotDifficulty::Easy, BotDifficulty::Normal, BotDifficulty::Hard,
-    };
     int bId = 0;
     for (size_t i = 0; i < world.botSpawns.size(); ++i) {
         Bot b{};
         b.id = bId++;
         b.position = world.botSpawns[i];
-        b.difficulty = difficulties[i % 3];
-        b.weapon = Weapon::makeClassic();
+        b.difficulty = selectedDifficulty;
+        // Harder difficulties get upgraded loadouts.
+        switch (selectedDifficulty) {
+        case BotDifficulty::Easy:   b.weapon = Weapon::makeClassic(); break;
+        case BotDifficulty::Normal: b.weapon = Weapon::makeSpectre(); break;
+        case BotDifficulty::Hard:   b.weapon = Weapon::makeVandal();  break;
+        }
         bots.push_back(b);
     }
 
@@ -128,9 +190,79 @@ int runApp(const Config& cfg) {
     std::vector<SmokeVolume>     smokeVols;
     std::vector<TracerEffect>    tracers;
     MuzzleFlashEffect muzzle{};
+    ViewModelState    vm{};
+
+    // Networking state (connection is established further down after `hud`
+    // is declared, because the callbacks reference it by reference).
+    const bool wantNet = (cfg.mode == "team");
+    std::unique_ptr<fps::net::NetClient> netClient;
+    bool netConnected = false;
+    uint8_t myClientId = 0;
+    uint8_t myTeam = 0;
+    uint8_t lastScoreBlue = 0, lastScoreRed = 0;
+    uint32_t nextInputSeq = 0;
+    std::vector<RemoteEntity> remoteEntities;
+    Vector3 lastAuthorityPos = player.position;
 
     HudState hud{};
     hud.botsAlive = static_cast<int>(bots.size());
+
+    // ----- Attempt the network handshake ---------------------------------
+    // Team mode connects to the dedicated `fps_server`; solo stays local.
+    if (wantNet) {
+        if (fps::net::NetClient::globalInit()) {
+            netClient = std::make_unique<fps::net::NetClient>();
+            if (netClient->connect(cfg.serverIp,
+                                   static_cast<uint16_t>(cfg.serverPort),
+                                   cfg.playerName, 5000)) {
+                netConnected = true;
+                netClient->onWelcome([&](const fps::net::WelcomePacket& wp) {
+                    myClientId = wp.clientId;
+                    myTeam = wp.team;
+                    std::printf("[fps_game] welcomed id=%u team=%u\n",
+                                wp.clientId, wp.team);
+                });
+                netClient->onSnapshot([&](const fps::net::SnapshotPacket& sp) {
+                    remoteEntities.clear();
+                    lastScoreBlue = sp.scoreBlue;
+                    lastScoreRed  = sp.scoreRed;
+                    for (int i = 0; i < sp.entityCount; ++i) {
+                        const auto& e = sp.entities[i];
+                        if (e.kind == 0 && e.id == sp.yourId) {
+                            lastAuthorityPos = Vector3{e.x, e.y, e.z};
+                            player.health = e.health;
+                            player.alive  = e.alive != 0;
+                            hud.playerKills = e.kills;
+                            continue;
+                        }
+                        RemoteEntity r{};
+                        r.id       = e.id;
+                        r.kind     = e.kind;
+                        r.team     = e.team;
+                        r.alive    = e.alive != 0;
+                        r.health   = e.health;
+                        r.kills    = e.kills;
+                        r.position = Vector3{e.x, e.y, e.z};
+                        r.yaw      = e.yaw;
+                        r.pitch    = e.pitch;
+                        remoteEntities.push_back(r);
+                    }
+                });
+                netClient->onHitFeedback([&](const fps::net::HitFeedbackPacket& h) {
+                    hud.hitMarkerTimer = 0.18f;
+                    PlaySound(sfx.hitmarker);
+                    if (h.killed) ++hud.playerKills;
+                });
+            } else {
+                std::fprintf(stderr, "[fps_game] failed to connect to %s:%d; "
+                                     "falling back to local sim.\n",
+                             cfg.serverIp.c_str(), cfg.serverPort);
+                netClient.reset();
+            }
+        }
+    }
+    // Networked: server owns bots, so clear the locally-spawned list.
+    if (netConnected) bots.clear();
 
     float respawnTimer = 0.0f;
     float matchClock = 0.0f;
@@ -138,15 +270,47 @@ int runApp(const Config& cfg) {
     const float FIXED_DT = 1.0f / 120.0f;
     float accumulator = 0.0f;
     float footstepTimer = 0.0f;
+    bool  paused = false;
+    bool  requestExit = false;
 
-    while (!WindowShouldClose()) {
+    while (!WindowShouldClose() && !requestExit) {
         const float frameDt = std::min(GetFrameTime(), 0.1f);
         accumulator += frameDt;
         hud.matchTime = matchClock;
 
-        while (accumulator >= FIXED_DT) {
+        // ESC toggles the pause menu. When paused we release the cursor and
+        // skip the fixed-timestep update so gameplay freezes.
+        if (IsKeyPressed(KEY_ESCAPE)) {
+            paused = !paused;
+            if (paused) EnableCursor();
+            else        DisableCursor();
+            accumulator = 0.0f; // avoid a huge catch-up burst on resume
+        }
+
+        if (paused) {
+            // Handle pause-menu clicks / keys.
+            const int sw = GetScreenWidth();
+            const int sh = GetScreenHeight();
+            const Rectangle resumeBtn{sw / 2.0f - 140.0f, sh / 2.0f - 20.0f,  280.0f, 48.0f};
+            const Rectangle quitBtn{  sw / 2.0f - 140.0f, sh / 2.0f + 48.0f,  280.0f, 48.0f};
+            Vector2 mp = GetMousePosition();
+            bool resumeHover = CheckCollisionPointRec(mp, resumeBtn);
+            bool quitHover   = CheckCollisionPointRec(mp, quitBtn);
+            if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+                if (resumeHover) { paused = false; DisableCursor(); accumulator = 0.0f; }
+                else if (quitHover) { requestExit = true; }
+            }
+            if (IsKeyPressed(KEY_Q)) requestExit = true;
+        }
+
+        while (!paused && accumulator >= FIXED_DT) {
             accumulator -= FIXED_DT;
             matchClock += FIXED_DT;
+
+            bool firedThisTick = false;
+
+            // Drain incoming server packets at the start of each tick.
+            if (netClient) netClient->poll();
 
             if (hud.hitMarkerTimer > 0.0f)    hud.hitMarkerTimer    -= FIXED_DT;
             if (hud.damageFlashTimer > 0.0f)  hud.damageFlashTimer  -= FIXED_DT;
@@ -164,8 +328,11 @@ int runApp(const Config& cfg) {
             Vector3 wish = v3Zero();
             if (IsKeyDown(KEY_W)) wish = v3Add(wish, fwd);
             if (IsKeyDown(KEY_S)) wish = v3Sub(wish, fwd);
-            if (IsKeyDown(KEY_D)) wish = v3Add(wish, right);
-            if (IsKeyDown(KEY_A)) wish = v3Sub(wish, right);
+            // D / A strafe: our 'right' basis vector points to screen-left under
+            // Raylib's gluLookAt convention, so we subtract it for D and add for A
+            // to match WASD expectations on screen.
+            if (IsKeyDown(KEY_D)) wish = v3Sub(wish, right);
+            if (IsKeyDown(KEY_A)) wish = v3Add(wish, right);
             float wishLen = v3Len(wish);
             if (wishLen > 0.0f) wish = v3Scale(wish, 1.0f / wishLen);
             float targetSpeed = player.speedMultiplier();
@@ -203,6 +370,18 @@ int runApp(const Config& cfg) {
             }
 
             Weapon& w = loadout[currentWeapon];
+            // Track reload progress to trigger a "bolt slam" click partway
+            // through the animation for that crispy mid-reload feel.
+            static float prevReloadProg = 0.0f;
+            float curReloadProg = 0.0f;
+            if (w.reloadLeft > 0.0f && w.stats.reloadTime > 0.0f) {
+                curReloadProg = 1.0f - (w.reloadLeft / w.stats.reloadTime);
+            }
+            if (prevReloadProg < 0.82f && curReloadProg >= 0.82f) {
+                PlaySound(sfx.reload);
+            }
+            prevReloadProg = curReloadProg;
+
             w.tick(FIXED_DT);
             smokeUtility.tick(FIXED_DT);
             if (muzzle.life > 0.0f) muzzle.life -= FIXED_DT;
@@ -228,16 +407,30 @@ int runApp(const Config& cfg) {
                             best = t; hitBotIdx = static_cast<int>(i); hs = h;
                         }
                     }
-                    if (hitBotIdx >= 0) {
+                    if (!netConnected && hitBotIdx >= 0) {
                         int dmg = hs ? w.stats.damageHead : w.stats.damageBody;
                         bots[hitBotIdx].applyDamage(dmg);
                         hud.hitMarkerTimer = 0.18f;
                         PlaySound(sfx.hitmarker);
                         if (!bots[hitBotIdx].alive) ++hud.playerKills;
                     }
+                    // Knife in multiplayer: short-range authoritative attack.
+                    if (netConnected && netClient) {
+                        fps::net::FirePacket fp{};
+                        fp.sequence = nextInputSeq;
+                        fp.weaponSlot = static_cast<uint8_t>(currentWeapon);
+                        fp.weaponKind = 2;
+                        fp.originX = eye.x; fp.originY = eye.y; fp.originZ = eye.z;
+                        fp.dirX = aim.x; fp.dirY = aim.y; fp.dirZ = aim.z;
+                        fp.maxRange = w.stats.knifeRange;
+                        fp.bodyDamage = static_cast<uint8_t>(std::min(w.stats.damageBody, 255));
+                        fp.headshotDamage = static_cast<uint8_t>(std::min(w.stats.damageHead, 255));
+                        netClient->sendFire(fp);
+                    }
                     PlaySound(sfx.knife);
                     w.cooldown = w.stats.fireInterval;
                     w.sinceLastShot = 0.0f;
+                    firedThisTick = true;
                 } else {
                     Vector3 aimDir = aim;
                     Vector3 sprayOff{0, 0, 0};
@@ -282,7 +475,8 @@ int runApp(const Config& cfg) {
                     tr.color = blocked ? Color{180, 200, 220, 180} : Color{255, 240, 200, 220};
                     tracers.push_back(tr);
 
-                    if (!blocked && hitBotIdx >= 0) {
+                    // Local hit resolution only when running the solo sim.
+                    if (!netConnected && !blocked && hitBotIdx >= 0) {
                         int dmg = hs ? w.stats.damageHead : w.stats.damageBody;
                         bots[hitBotIdx].applyDamage(dmg);
                         hud.hitMarkerTimer = 0.18f;
@@ -290,11 +484,26 @@ int runApp(const Config& cfg) {
                         if (!bots[hitBotIdx].alive) ++hud.playerKills;
                     }
 
+                    // Networked: let the server resolve damage authoritatively.
+                    if (netConnected && netClient) {
+                        fps::net::FirePacket fp{};
+                        fp.sequence = nextInputSeq;
+                        fp.weaponSlot = static_cast<uint8_t>(currentWeapon);
+                        fp.weaponKind = 0; // rifle/pistol - informational
+                        fp.originX = eye.x; fp.originY = eye.y; fp.originZ = eye.z;
+                        fp.dirX = aimDir.x; fp.dirY = aimDir.y; fp.dirZ = aimDir.z;
+                        fp.maxRange = w.stats.maxRange;
+                        fp.bodyDamage = static_cast<uint8_t>(std::min(w.stats.damageBody, 255));
+                        fp.headshotDamage = static_cast<uint8_t>(std::min(w.stats.damageHead, 255));
+                        netClient->sendFire(fp);
+                    }
+
                     PlaySound(w.stats.kind == WeaponKind::Pistol ? sfx.pistol : sfx.rifle);
                     w.ammoInMag--;
                     w.cooldown = w.stats.fireInterval;
                     w.sinceLastShot = 0.0f;
                     muzzle.life = 0.06f;
+                    firedThisTick = true;
                 }
             }
 
@@ -303,6 +512,7 @@ int runApp(const Config& cfg) {
                 smokeUtility.ammoInMag--;
                 smokeUtility.cooldown = smokeUtility.stats.fireInterval;
                 PlaySound(sfx.smokeThrow);
+                firedThisTick = true;
             }
 
             footstepTimer += FIXED_DT;
@@ -318,41 +528,88 @@ int runApp(const Config& cfg) {
             tickSmokes(smokeProjs, smokeVols, world, FIXED_DT);
             if (smokeVols.size() > smokeCountBefore) PlaySound(sfx.smokePuff);
 
-            std::vector<BotShot> shots;
-            for (Bot& b : bots) {
-                updateBot(b, player, world, smokeVols, FIXED_DT, shots);
-            }
-            for (const BotShot& s : shots) {
-                player.applyDamage(s.damage);
-                hud.damageFlashTimer = 0.5f;
-                (void)s.botId;
-            }
-
-            int alive = 0;
-            for (const Bot& b : bots) if (b.alive) ++alive;
-            hud.botsAlive = alive;
-
-            if (alive == 0) {
-                for (size_t i = 0; i < bots.size(); ++i) {
-                    bots[i].alive = true;
-                    bots[i].health = 100;
-                    bots[i].armor = 25;
-                    bots[i].state = BotState::Patrol;
-                    bots[i].path.clear();
-                    bots[i].pathIdx = 0;
-                    bots[i].position = world.botSpawns[i % world.botSpawns.size()];
+            // Local bot AI (solo mode only). In team mode the server owns
+            // the world state; remote players + server-driven bots are
+            // rendered from snapshots.
+            if (!netConnected) {
+                std::vector<BotShot> shots;
+                for (Bot& b : bots) {
+                    updateBot(b, player, world, smokeVols, FIXED_DT, shots);
                 }
-            }
+                for (const BotShot& s : shots) {
+                    player.applyDamage(s.damage);
+                    hud.damageFlashTimer = 0.5f;
+                    (void)s.botId;
+                }
 
-            if (!player.alive) {
-                respawnTimer -= FIXED_DT;
-                if (respawnTimer <= 0.0f) {
-                    player.spawn(world.playerSpawn);
-                    for (Weapon& lw : loadout) { lw.ammoInMag = lw.stats.magSize; lw.reloadLeft = 0; }
-                    smokeUtility.ammoInMag = smokeUtility.stats.magSize;
+                int alive = 0;
+                for (const Bot& b : bots) if (b.alive) ++alive;
+                hud.botsAlive = alive;
+
+                if (alive == 0 && !bots.empty()) {
+                    for (size_t i = 0; i < bots.size(); ++i) {
+                        bots[i].alive = true;
+                        bots[i].health = 100;
+                        bots[i].armor = 25;
+                        bots[i].state = BotState::Patrol;
+                        bots[i].path.clear();
+                        bots[i].pathIdx = 0;
+                        bots[i].position = world.botSpawns[i % world.botSpawns.size()];
+                    }
+                }
+
+                if (!player.alive) {
+                    respawnTimer -= FIXED_DT;
+                    if (respawnTimer <= 0.0f) {
+                        player.spawn(world.playerSpawn);
+                        for (Weapon& lw : loadout) { lw.ammoInMag = lw.stats.magSize; lw.reloadLeft = 0; }
+                        smokeUtility.ammoInMag = smokeUtility.stats.magSize;
+                    }
+                } else {
+                    respawnTimer = 5.0f;
                 }
             } else {
-                respawnTimer = 5.0f;
+                // Networked: server drives life/death. We still show the death
+                // overlay + countdown locally.
+                int aliveCount = 0;
+                for (const RemoteEntity& re : remoteEntities)
+                    if (re.alive) ++aliveCount;
+                hud.botsAlive = aliveCount;
+                if (!player.alive) {
+                    respawnTimer -= FIXED_DT;
+                    if (respawnTimer < 0.0f) respawnTimer = 0.0f;
+                } else {
+                    respawnTimer = 5.0f;
+                }
+                // Soft reconciliation: if the server says we're significantly
+                // elsewhere, snap toward it. Otherwise trust local prediction.
+                float divergence = v3Len(v3Sub(player.position, lastAuthorityPos));
+                if (divergence > 3.0f) {
+                    player.position = lastAuthorityPos;
+                    player.velocity = v3Zero();
+                } else if (divergence > 0.5f) {
+                    // Gentle blend for small drift.
+                    player.position = v3Add(
+                        v3Scale(player.position, 0.85f),
+                        v3Scale(lastAuthorityPos, 0.15f));
+                }
+
+                // Send input to the server.
+                if (netClient && netClient->connected()) {
+                    PlayerInput in{};
+                    in.sequence = ++nextInputSeq;
+                    in.dt = FIXED_DT;
+                    in.yaw = player.yaw;
+                    in.pitch = player.pitch;
+                    in.moveForward = IsKeyDown(KEY_W) ? 1 : (IsKeyDown(KEY_S) ? -1 : 0);
+                    in.moveRight   = IsKeyDown(KEY_D) ? 1 : (IsKeyDown(KEY_A) ? -1 : 0);
+                    in.buttons = 0;
+                    if (IsKeyDown(KEY_SPACE))            in.buttons |= 0x01;
+                    if (player.crouching)                in.buttons |= 0x02;
+                    if (player.walking)                  in.buttons |= 0x04;
+                    in.weaponSlot = static_cast<uint8_t>(currentWeapon);
+                    netClient->sendInput(in);
+                }
             }
 
             for (TracerEffect& t : tracers) t.life -= FIXED_DT;
@@ -360,6 +617,10 @@ int runApp(const Config& cfg) {
                 std::remove_if(tracers.begin(), tracers.end(),
                                [](const TracerEffect& t) { return t.life <= 0.0f; }),
                 tracers.end());
+
+            // Viewmodel state: bob + kick + swap animation.
+            float horizSpeedVm = v3Len(Vector3{player.velocity.x, 0, player.velocity.z});
+            tickViewModel(vm, FIXED_DT, horizSpeedVm, firedThisTick, currentWeapon);
         }
 
         Camera3D cam = player.buildCamera();
@@ -387,6 +648,9 @@ int runApp(const Config& cfg) {
         }
 
         for (const Bot& b : bots) drawBot(b);
+
+        // In networked mode, render remote players + server-owned bots.
+        for (const RemoteEntity& re : remoteEntities) drawRemoteAgent(re);
 
         for (const SmokeProjectile& p : smokeProjs) {
             DrawSphere(p.position, 0.12f, Color{180, 180, 180, 255});
@@ -417,37 +681,89 @@ int runApp(const Config& cfg) {
                        Color{255, 220, 120, a > 160 ? (unsigned char)160 : a});
         }
 
-        {
-            int sw = GetScreenWidth();
-            int sh = GetScreenHeight();
-            int wx = sw - 280;
-            int wy = sh - 220;
-            const Weapon& cw = loadout[currentWeapon];
-            Color vm{40, 45, 60, 230};
-            Color accent{80, 90, 120, 255};
-            if (cw.stats.kind == WeaponKind::Knife) {
-                DrawRectangle(wx + 40, wy + 10, 120, 12, vm);
-                DrawRectangle(wx + 30, wy + 22, 10, 22, accent);
-            } else {
-                DrawRectangle(wx, wy + 60, 220, 30, vm);
-                DrawRectangle(wx + 60, wy + 90, 40, 60, vm);
-                DrawRectangle(wx + 160, wy + 40, 28, 20, accent);
-                if (cw.stats.kind == WeaponKind::Rifle) {
-                    DrawRectangle(wx - 30, wy + 66, 60, 14, vm);
-                }
-            }
-        }
+        // 3D viewmodel (right-hand gun + arms). Drawn after the world scene
+        // but before the HUD so the crosshair, ammo, etc. sit on top.
+        drawViewModel(vm, loadout[currentWeapon]);
 
         drawHud(hud, player, loadout[currentWeapon],
                 GetScreenWidth(), GetScreenHeight(), cfg.playerName.c_str());
 
-        if (!player.alive) {
+        // Team scoreboard ribbon (networked mode only).
+        if (netConnected) {
+            int sw = GetScreenWidth();
+            int cx = sw / 2;
+            char buf[64];
+            std::snprintf(buf, sizeof(buf), "%u   :   %u",
+                          static_cast<unsigned>(lastScoreBlue),
+                          static_cast<unsigned>(lastScoreRed));
+            int tw = MeasureText(buf, 36);
+            DrawRectangle(cx - tw / 2 - 24, 58, tw + 48, 44, Color{0, 0, 0, 160});
+            DrawText("BLUE", cx - tw / 2 - 70, 68, 18, Color{80, 150, 230, 255});
+            DrawText("RED",  cx + tw / 2 + 20, 68, 18, Color{230, 80, 90, 255});
+            DrawText(buf, cx - tw / 2, 62, 36,
+                     myTeam == 0 ? Color{150, 210, 255, 255}
+                                 : Color{255, 150, 160, 255});
+            // "Connected" indicator.
+            const char* tag = myTeam == 0 ? "TEAM BLUE" : "TEAM RED";
+            int tagW = MeasureText(tag, 16);
+            DrawRectangle(sw - tagW - 28, 16, tagW + 20, 28, Color{0, 0, 0, 160});
+            DrawText(tag, sw - tagW - 18, 22, 16, teamColor(myTeam));
+        } else if (wantNet) {
+            // Failed to connect - warn the user.
+            const char* msg = "Server unreachable - running local sim";
+            int tw = MeasureText(msg, 16);
+            DrawRectangle(GetScreenWidth() / 2 - tw / 2 - 12, 60, tw + 24, 26,
+                          Color{120, 30, 40, 220});
+            DrawText(msg, GetScreenWidth() / 2 - tw / 2, 64, 16,
+                     Color{255, 220, 220, 255});
+        }
+
+        if (!player.alive && !paused) {
             drawDeathOverlay(GetScreenWidth(), GetScreenHeight(), respawnTimer);
+        }
+
+        if (paused) {
+            const int sw = GetScreenWidth();
+            const int sh = GetScreenHeight();
+            DrawRectangle(0, 0, sw, sh, Color{8, 10, 16, 200});
+            const char* title = "PAUSED";
+            int tw = MeasureText(title, 56);
+            DrawText(title, sw / 2 - tw / 2, sh / 2 - 150, 56, Color{230, 235, 255, 255});
+
+            // Map + difficulty context line.
+            char ctx[128];
+            const char* diffStr = cfg.difficulty == "easy"   ? "Easy" :
+                                  cfg.difficulty == "hard"   ? "Hard" : "Medium";
+            std::snprintf(ctx, sizeof(ctx), "Map: %s   Difficulty: %s",
+                          world.displayName.c_str(), diffStr);
+            int cw = MeasureText(ctx, 18);
+            DrawText(ctx, sw / 2 - cw / 2, sh / 2 - 80, 18, Color{160, 170, 200, 255});
+
+            Vector2 mp = GetMousePosition();
+            const Rectangle resumeBtn{sw / 2.0f - 140.0f, sh / 2.0f - 20.0f,  280.0f, 48.0f};
+            const Rectangle quitBtn{  sw / 2.0f - 140.0f, sh / 2.0f + 48.0f,  280.0f, 48.0f};
+            bool resumeHover = CheckCollisionPointRec(mp, resumeBtn);
+            bool quitHover   = CheckCollisionPointRec(mp, quitBtn);
+
+            auto drawBtn = [](Rectangle r, const char* label, bool hover, Color accent) {
+                DrawRectangleRec(r, hover ? accent : Color{30, 34, 48, 255});
+                DrawRectangleLinesEx(r, 2, accent);
+                int lw = MeasureText(label, 20);
+                DrawText(label, (int)(r.x + r.width / 2 - lw / 2),
+                         (int)(r.y + r.height / 2 - 10), 20, Color{240, 240, 250, 255});
+            };
+            drawBtn(resumeBtn, "Resume (Esc)", resumeHover, Color{80, 200, 130, 255});
+            drawBtn(quitBtn,   "Quit to Desktop (Q)", quitHover, Color{200, 80, 90, 255});
         }
 
         EndDrawing();
     }
 
+    if (netClient) {
+        netClient->disconnect();
+        netClient.reset();
+        fps::net::NetClient::globalShutdown();
+    }
     sfx.unload();
     CloseAudioDevice();
     CloseWindow();

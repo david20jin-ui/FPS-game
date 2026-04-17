@@ -32,6 +32,7 @@ export class Matchmaker {
       playerId: payload.playerId,
       name: payload.name,
       mode: payload.mode,
+      mapId: payload.mapId,
       joinedAt: Date.now(),
     };
     this.queues[payload.mode].push(entry);
@@ -73,19 +74,23 @@ export class Matchmaker {
     while (q.length >= needed) {
       const group = q.splice(0, needed);
       const matchId = randomUUID();
-      const { ip, port } = this.pool.allocate(matchId, mode);
+      // Map is decided by the first player in the group's picker (team mode);
+      // solo matches let each client choose independently via their CLI args.
+      const mapId = group[0]?.mapId;
+      const { ip, port } = this.pool.allocate(matchId, mode, mapId);
       const payload: MatchFoundPayload = {
         matchId,
         ip,
         port,
         token: randomUUID(),
         mode,
+        mapId,
       };
       for (const player of group) {
         this.io.to(player.socketId).emit("match:found", payload);
       }
       console.log(
-        `[matchmaker] match formed (${mode}) for ${group.map((p) => p.name).join(", ")} -> ${ip}:${port}`
+        `[matchmaker] match formed (${mode}, map=${mapId ?? "default"}) for ${group.map((p) => p.name).join(", ")} -> ${ip}:${port}`
       );
     }
     this.broadcastQueue(mode);

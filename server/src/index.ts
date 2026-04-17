@@ -16,7 +16,7 @@ const io = new Server(httpServer, { cors: { origin: "*" } });
 
 const matchmaker = new Matchmaker(io, {
   soloTeamSize: Number(process.env.SOLO_TEAM_SIZE ?? 1),
-  teamTeamSize: Number(process.env.TEAM_TEAM_SIZE ?? 2),
+  teamTeamSize: Number(process.env.TEAM_TEAM_SIZE ?? 10), // 5v5
 });
 
 io.on("connection", (socket) => {

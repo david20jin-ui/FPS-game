@@ -16,8 +16,8 @@ export function MainMenu({ name, onPlay }: Props): JSX.Element {
           <p>Drop into a practice map against AI-controlled agents. Perfect for warmup and crosshair calibration.</p>
         </button>
         <button className="mode-card" onClick={() => onPlay("team")}>
-          <h3>Unrated (Team)</h3>
-          <p>Standard 5v5-style plant/defuse. (MVP queues 2 players to form a match.)</p>
+          <h3>Team Deathmatch (5v5)</h3>
+          <p>Queue into a live 10-player match on a shared dedicated server. Team-colored players, authoritative hits, kill feed.</p>
         </button>
       </div>
     </div>

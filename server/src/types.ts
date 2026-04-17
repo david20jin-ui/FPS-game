@@ -4,6 +4,7 @@ export interface QueueJoinPayload {
   playerId: string;
   name: string;
   mode: MatchMode;
+  mapId?: string;
 }
 
 export interface QueueLeavePayload {}
@@ -20,6 +21,7 @@ export interface MatchFoundPayload {
   port: number;
   token: string;
   mode: MatchMode;
+  mapId?: string;
 }
 
 export interface ErrorPayload {
@@ -32,5 +34,6 @@ export interface QueuedPlayer {
   playerId: string;
   name: string;
   mode: MatchMode;
+  mapId?: string;
   joinedAt: number;
 }

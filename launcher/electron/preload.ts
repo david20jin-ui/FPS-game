@@ -8,6 +8,8 @@ export interface LaunchGameArgs {
   mode: string;
   fov?: number;
   sensitivity?: number;
+  difficulty?: string;
+  mapId?: string;
 }
 
 export interface LaunchGameResult {
