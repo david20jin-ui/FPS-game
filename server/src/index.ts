@@ -6,10 +6,19 @@ import { Matchmaker } from "./matchmaker.js";
 import type { QueueJoinPayload } from "./types.js";
 
 const PORT = Number(process.env.PORT ?? 4000);
+const HOST = process.env.HOST ?? "0.0.0.0";
+
+console.log(
+  `[server] starting node=${process.version} PORT=${PORT} HOST=${HOST} ` +
+  `NODE_ENV=${process.env.NODE_ENV ?? "<unset>"}`
+);
 
 const app = express();
 app.use(cors());
 app.get("/health", (_req, res) => res.json({ ok: true }));
+app.get("/", (_req, res) =>
+  res.json({ service: "fps-matchmaker", ok: true, port: PORT })
+);
 
 const httpServer = http.createServer(app);
 const io = new Server(httpServer, { cors: { origin: "*" } });
@@ -38,8 +47,19 @@ io.on("connection", (socket) => {
   });
 });
 
-httpServer.listen(PORT, () => {
-  console.log(`[server] matchmaking listening on http://localhost:${PORT}`);
+httpServer.listen(PORT, HOST, () => {
+  console.log(`[server] matchmaking listening on http://${HOST}:${PORT}`);
+});
+
+httpServer.on("error", (err) => {
+  console.error("[server] httpServer error:", err);
+});
+
+process.on("uncaughtException", (err) => {
+  console.error("[server] uncaughtException:", err);
+});
+process.on("unhandledRejection", (reason) => {
+  console.error("[server] unhandledRejection:", reason);
 });
 
 const shutdown = () => {
