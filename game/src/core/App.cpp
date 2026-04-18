@@ -150,9 +150,14 @@ int runApp(const Config& cfg) {
     auto parseDifficulty = [](const std::string& s) {
         if (s == "easy")   return BotDifficulty::Easy;
         if (s == "hard")   return BotDifficulty::Hard;
-        return BotDifficulty::Normal; // "medium" and everything else
+        return BotDifficulty::Normal;
     };
-    const BotDifficulty selectedDifficulty = parseDifficulty(cfg.difficulty);
+    BotDifficulty selectedDifficulty = parseDifficulty(cfg.difficulty);
+
+    // Currently-selected map and difficulty labels (mutable because the
+    // in-game main menu lets the player cycle through them).
+    std::string currentMapName    = cfg.mapName;
+    std::string currentDifficulty = cfg.difficulty;
 
     Player player{};
     player.spawn(world.playerSpawn);
@@ -172,19 +177,22 @@ int runApp(const Config& cfg) {
 
     std::vector<Bot> bots;
     int bId = 0;
-    for (size_t i = 0; i < world.botSpawns.size(); ++i) {
-        Bot b{};
-        b.id = bId++;
-        b.position = world.botSpawns[i];
-        b.difficulty = selectedDifficulty;
-        // Harder difficulties get upgraded loadouts.
-        switch (selectedDifficulty) {
-        case BotDifficulty::Easy:   b.weapon = Weapon::makeClassic(); break;
-        case BotDifficulty::Normal: b.weapon = Weapon::makeSpectre(); break;
-        case BotDifficulty::Hard:   b.weapon = Weapon::makeVandal();  break;
+    auto spawnBots = [&]() {
+        bots.clear();
+        for (size_t i = 0; i < world.botSpawns.size(); ++i) {
+            Bot b{};
+            b.id = bId++;
+            b.position = world.botSpawns[i];
+            b.difficulty = selectedDifficulty;
+            switch (selectedDifficulty) {
+            case BotDifficulty::Easy:   b.weapon = Weapon::makeClassic(); break;
+            case BotDifficulty::Normal: b.weapon = Weapon::makeSpectre(); break;
+            case BotDifficulty::Hard:   b.weapon = Weapon::makeVandal();  break;
+            }
+            bots.push_back(b);
         }
-        bots.push_back(b);
-    }
+    };
+    spawnBots();
 
     std::vector<SmokeProjectile> smokeProjs;
     std::vector<SmokeVolume>     smokeVols;
@@ -273,10 +281,137 @@ int runApp(const Config& cfg) {
     bool  paused = false;
     bool  requestExit = false;
 
+    // ----- In-game screen state ------------------------------------------
+    // Default entry point is the main menu. Jump straight into a match for
+    // team mode (the launcher already picked the map) or when the user
+    // explicitly passes --skip-menu=1 from the command line.
+    enum class GameScreen { MainMenu, InMatch };
+    GameScreen screen = (wantNet || cfg.mode == "team") ? GameScreen::InMatch
+                                                        : GameScreen::MainMenu;
+    if (screen == GameScreen::MainMenu) EnableCursor();
+
+    // Cycle the map/difficulty selection and rebuild the world accordingly.
+    auto cycleMap = [&]() {
+        if      (currentMapName == "range")     currentMapName = "warehouse";
+        else if (currentMapName == "warehouse") currentMapName = "arena";
+        else                                    currentMapName = "range";
+    };
+    auto cycleDifficulty = [&]() {
+        if      (currentDifficulty == "easy")   currentDifficulty = "medium";
+        else if (currentDifficulty == "medium") currentDifficulty = "hard";
+        else                                    currentDifficulty = "easy";
+        selectedDifficulty = parseDifficulty(currentDifficulty);
+    };
+
+    // Reload the world + respawn the player and bots. Called when the user
+    // presses Play in the main menu (or after changing map/difficulty).
+    auto startMatch = [&]() {
+        world = Map::buildByName(currentMapName);
+        selectedDifficulty = parseDifficulty(currentDifficulty);
+        player.spawn(world.playerSpawn);
+        for (Weapon& w : loadout) {
+            w.ammoInMag = w.stats.magSize;
+            w.reloadLeft = 0;
+        }
+        smokeUtility.ammoInMag = smokeUtility.stats.magSize;
+        spawnBots();
+        smokeProjs.clear();
+        smokeVols.clear();
+        tracers.clear();
+        hud.playerKills = 0;
+        matchClock = 0.0f;
+        accumulator = 0.0f;
+        paused = false;
+        screen = GameScreen::InMatch;
+        DisableCursor();
+    };
+
     while (!WindowShouldClose() && !requestExit) {
         const float frameDt = std::min(GetFrameTime(), 0.1f);
         accumulator += frameDt;
         hud.matchTime = matchClock;
+
+        // ========================= MAIN MENU SCREEN =========================
+        if (screen == GameScreen::MainMenu) {
+            const int sw = GetScreenWidth();
+            const int sh = GetScreenHeight();
+            const float cx = sw * 0.5f;
+
+            const Rectangle playBtn{ cx - 170.0f, sh * 0.42f,        340.0f, 64.0f };
+            const Rectangle mapBtn{  cx - 170.0f, sh * 0.42f +  84.0f, 340.0f, 48.0f };
+            const Rectangle diffBtn{ cx - 170.0f, sh * 0.42f + 144.0f, 340.0f, 48.0f };
+            const Rectangle quitBtn{ cx - 170.0f, sh * 0.42f + 220.0f, 340.0f, 44.0f };
+
+            Vector2 mp = GetMousePosition();
+            bool playH = CheckCollisionPointRec(mp, playBtn);
+            bool mapH  = CheckCollisionPointRec(mp, mapBtn);
+            bool diffH = CheckCollisionPointRec(mp, diffBtn);
+            bool quitH = CheckCollisionPointRec(mp, quitBtn);
+            if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+                if (playH)      startMatch();
+                else if (mapH)  cycleMap();
+                else if (diffH) cycleDifficulty();
+                else if (quitH) requestExit = true;
+            }
+            // Keyboard shortcuts.
+            if (IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_SPACE)) startMatch();
+            if (IsKeyPressed(KEY_M)) cycleMap();
+            if (IsKeyPressed(KEY_T)) cycleDifficulty();
+            if (IsKeyPressed(KEY_ESCAPE) || IsKeyPressed(KEY_Q)) requestExit = true;
+
+            BeginDrawing();
+            ClearBackground(Color{10, 12, 20, 255});
+            // Radial vignette behind the logo.
+            for (int i = 0; i < 12; ++i) {
+                DrawCircle((int)cx, (int)(sh * 0.24f), 200.0f - i * 10.0f,
+                           Color{static_cast<unsigned char>(30 + i * 3),
+                                 20, 40, 10});
+            }
+            // Title.
+            const char* title = "FPS //";
+            int tw = MeasureText(title, 96);
+            DrawText(title, (int)(cx - tw / 2), (int)(sh * 0.15f), 96,
+                     Color{255, 70, 85, 255});
+            const char* sub = "Valorant-inspired tactical FPS";
+            int sw2 = MeasureText(sub, 20);
+            DrawText(sub, (int)(cx - sw2 / 2), (int)(sh * 0.15f + 108), 20,
+                     Color{140, 150, 170, 255});
+
+            auto drawMenuBtn = [&](Rectangle r, const char* label, bool hover,
+                                   Color accent, int fontSize) {
+                DrawRectangleRec(r, hover ? accent : Color{26, 30, 44, 255});
+                DrawRectangleLinesEx(r, hover ? 3 : 2, accent);
+                int lw = MeasureText(label, fontSize);
+                DrawText(label, (int)(r.x + r.width / 2 - lw / 2),
+                         (int)(r.y + r.height / 2 - fontSize / 2), fontSize,
+                         Color{240, 240, 250, 255});
+            };
+            drawMenuBtn(playBtn, "PLAY  \u25B6", playH,
+                        Color{255, 70, 85, 255}, 34);
+
+            char mapLabel[96], diffLabel[96];
+            std::snprintf(mapLabel, sizeof(mapLabel),  "Map:  %s", currentMapName.c_str());
+            std::snprintf(diffLabel, sizeof(diffLabel), "Difficulty:  %s",
+                          currentDifficulty.c_str());
+            drawMenuBtn(mapBtn,  mapLabel,  mapH,  Color{80, 150, 230, 255}, 22);
+            drawMenuBtn(diffBtn, diffLabel, diffH, Color{80, 150, 230, 255}, 22);
+            drawMenuBtn(quitBtn, "Quit to Desktop", quitH,
+                        Color{180, 70, 80, 255}, 18);
+
+            // Hints bottom.
+            char nameLine[128];
+            std::snprintf(nameLine, sizeof(nameLine), "Playing as %s", cfg.playerName.c_str());
+            int nlw = MeasureText(nameLine, 16);
+            DrawText(nameLine, (int)(cx - nlw / 2), sh - 60, 16,
+                     Color{160, 170, 190, 255});
+            const char* hint = "ENTER play   M map   T difficulty   Q quit";
+            int hw = MeasureText(hint, 14);
+            DrawText(hint, (int)(cx - hw / 2), sh - 32, 14,
+                     Color{110, 120, 140, 230});
+
+            EndDrawing();
+            continue;
+        }
 
         // ESC toggles the pause menu. When paused we release the cursor and
         // skip the fixed-timestep update so gameplay freezes.
@@ -288,17 +423,19 @@ int runApp(const Config& cfg) {
         }
 
         if (paused) {
-            // Handle pause-menu clicks / keys.
             const int sw = GetScreenWidth();
             const int sh = GetScreenHeight();
-            const Rectangle resumeBtn{sw / 2.0f - 140.0f, sh / 2.0f - 20.0f,  280.0f, 48.0f};
-            const Rectangle quitBtn{  sw / 2.0f - 140.0f, sh / 2.0f + 48.0f,  280.0f, 48.0f};
+            const Rectangle resumeBtn{sw / 2.0f - 140.0f, sh / 2.0f -  40.0f, 280.0f, 48.0f};
+            const Rectangle menuBtn{  sw / 2.0f - 140.0f, sh / 2.0f +  28.0f, 280.0f, 48.0f};
+            const Rectangle quitBtn{  sw / 2.0f - 140.0f, sh / 2.0f +  96.0f, 280.0f, 48.0f};
             Vector2 mp = GetMousePosition();
             bool resumeHover = CheckCollisionPointRec(mp, resumeBtn);
+            bool menuHover   = CheckCollisionPointRec(mp, menuBtn);
             bool quitHover   = CheckCollisionPointRec(mp, quitBtn);
             if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
-                if (resumeHover) { paused = false; DisableCursor(); accumulator = 0.0f; }
-                else if (quitHover) { requestExit = true; }
+                if (resumeHover)      { paused = false; DisableCursor(); accumulator = 0.0f; }
+                else if (menuHover)   { paused = false; screen = GameScreen::MainMenu; EnableCursor(); }
+                else if (quitHover)   { requestExit = true; }
             }
             if (IsKeyPressed(KEY_Q)) requestExit = true;
         }
@@ -740,9 +877,11 @@ int runApp(const Config& cfg) {
             DrawText(ctx, sw / 2 - cw / 2, sh / 2 - 80, 18, Color{160, 170, 200, 255});
 
             Vector2 mp = GetMousePosition();
-            const Rectangle resumeBtn{sw / 2.0f - 140.0f, sh / 2.0f - 20.0f,  280.0f, 48.0f};
-            const Rectangle quitBtn{  sw / 2.0f - 140.0f, sh / 2.0f + 48.0f,  280.0f, 48.0f};
+            const Rectangle resumeBtn{sw / 2.0f - 140.0f, sh / 2.0f -  40.0f, 280.0f, 48.0f};
+            const Rectangle menuBtn{  sw / 2.0f - 140.0f, sh / 2.0f +  28.0f, 280.0f, 48.0f};
+            const Rectangle quitBtn{  sw / 2.0f - 140.0f, sh / 2.0f +  96.0f, 280.0f, 48.0f};
             bool resumeHover = CheckCollisionPointRec(mp, resumeBtn);
+            bool menuHover   = CheckCollisionPointRec(mp, menuBtn);
             bool quitHover   = CheckCollisionPointRec(mp, quitBtn);
 
             auto drawBtn = [](Rectangle r, const char* label, bool hover, Color accent) {
@@ -752,8 +891,9 @@ int runApp(const Config& cfg) {
                 DrawText(label, (int)(r.x + r.width / 2 - lw / 2),
                          (int)(r.y + r.height / 2 - 10), 20, Color{240, 240, 250, 255});
             };
-            drawBtn(resumeBtn, "Resume (Esc)", resumeHover, Color{80, 200, 130, 255});
-            drawBtn(quitBtn,   "Quit to Desktop (Q)", quitHover, Color{200, 80, 90, 255});
+            drawBtn(resumeBtn, "Resume (Esc)",         resumeHover, Color{80, 200, 130, 255});
+            drawBtn(menuBtn,   "Main Menu",            menuHover,   Color{80, 150, 230, 255});
+            drawBtn(quitBtn,   "Quit to Desktop (Q)",  quitHover,   Color{200, 80, 90, 255});
         }
 
         EndDrawing();
