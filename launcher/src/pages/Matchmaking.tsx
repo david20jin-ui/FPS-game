@@ -139,10 +139,13 @@ export function Matchmaking({
       );
     }
 
+    // In browser mode (no Electron), the banner is informational rather than
+    // an error — apply the "ok" style so it reads as green instead of red.
+    const bannerClass = launch?.ok || !isElectron ? "banner ok" : "banner";
     return (
       <div className="page matchmaking">
         <h1>Match found</h1>
-        <div className={`banner ${launch?.ok ? "ok" : ""}`}>{launchBanner}</div>
+        <div className={bannerClass}>{launchBanner}</div>
         <div className="card match-info" style={{ minWidth: 420 }}>
           <p>Match <strong>{match.matchId.slice(0, 8)}</strong></p>
           <p>Server <strong>{match.ip}:{match.port}</strong></p>
