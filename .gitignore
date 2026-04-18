@@ -3,6 +3,7 @@ dist/
 dist-electron/
 build/
 game/build/
+release-pkg/
 *.log
 .DS_Store
 .vite/
